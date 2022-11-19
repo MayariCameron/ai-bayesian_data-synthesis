@@ -7,3 +7,5 @@ inability to preform proper data analysis. Through a number of measures, we
 explore and evaluate the utility and risk of such a method of synthesizing data
 through the Dirichlet Process Mixture of Products of Multinomial distributions
 model on a patient characteristics survey.
+
+See pdf for full research paper and analysis
