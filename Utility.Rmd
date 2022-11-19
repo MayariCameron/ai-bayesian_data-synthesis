@@ -1,0 +1,538 @@
+---
+title: "Utility"
+author: "Cameron Flores"
+date: "10/24/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(qwraps2)
+library(knitr)
+library(ggplot2)
+library(productplots)
+library(brms)
+library(bayesplot)
+## read data set
+survey <- data.frame(readr::read_csv(file = "survey.csv"))
+
+survey <- survey %>%
+select("age", "gender", "race", "employ", "educ", "alc", "drug", "cann", "cash", "insurance", "region")
+
+survey$age[survey$age==1] <- 2
+survey$age[survey$age==0] <- 1
+
+survey$gender[survey$gender==1] <- 2
+survey$gender[survey$gender==0] <- 1
+
+survey$alc[survey$alc==1] <- 2
+survey$alc[survey$alc==0] <- 1
+
+survey$drug[survey$drug==1] <- 2
+survey$drug[survey$drug==0] <- 1
+
+survey$cann[survey$cann==1] <- 2
+survey$cann[survey$cann==0] <- 1
+
+survey$cash[survey$cash==1] <- 2
+survey$cash[survey$cash==0] <- 1
+
+survey$insurance[survey$insurance==1] <- 2
+survey$insurance[survey$insurance==0] <- 1
+
+survey$age <- as.factor(survey$age)
+survey$gender <- as.factor(survey$gender)
+survey$alc <- as.factor(survey$alc)
+survey$drug <- as.factor(survey$drug)
+survey$cann <- as.factor(survey$cann)
+survey$cash <- as.factor(survey$cash)
+
+survey
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+library(NPBayesImputeCat)
+
+dj <- c(2, 2, 4, 5, 6, 2, 2, 2, 2, 2, 5)
+r <- ncol(survey)
+# make sure all variables are categorical
+for (j in 1:r){
+  survey[, j] <- factor(survey[, j], levels = 1:dj[j])
+}
+
+#select random sample of three rows from data frame
+survey <- survey[sample(1:nrow(survey), 5000), ]
+```
+
+```{r size = "footnotesize", results = 'hide', message = FALSE, warning = FALSE}
+model <- NPBayesImputeCat::CreateModel(X = survey,
+                                       MCZ = NULL,
+                                       K = 70,
+                                       Nmax = 0,
+                                       aalpha = 0.25,
+                                       balpha = 0.25,
+                                       seed = 221)
+```
+
+```{r message=FALSE, warning=FALSE, results='hide', size="footnotesize"}
+m <- 5
+survey_syn <- NPBayesImputeCat::DPMPM_nozeros_syn(X = survey,
+                                                   dj = dj,
+                                                   nrun = 5000,
+                                                   burn = 500,
+                                                   thin = 10,
+                                                   K = 70,
+                                                   aalpha = 0.25,
+                                                   balpha = 0.25,
+                                                   m = m,
+                                                   vars = c("region", "alc", "drug", "cann", "cash"),
+                                                   seed = 221,
+                                                   silent = TRUE)
+```
+
+```{r size = "footnotesize", eval = FALSE, message = FALSE, warning = FALSE, echo=FALSE}
+library(bayesplot)
+kstar_MCMCdiag(kstar = survey_syn$kstar,
+               nrun = 5000,
+               burn = 500,
+               thin = 10)
+```
+
+```{r eval = TRUE, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 4, fig.width = 4, echo=FALSE}
+NPBayesImputeCat::marginal_compare_all_syn(obsdata = survey,
+                                           syndata = survey_syn$syndata,
+                                           vars = "region")
+```
+
+```{r eval = TRUE, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 4, fig.width = 4, echo=FALSE}
+NPBayesImputeCat::marginal_compare_all_syn(obsdata = survey,
+                                           syndata = survey_syn$syndata,
+                                           vars = "alc")
+```
+
+```{r eval = TRUE, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 4, fig.width = 4, echo=FALSE}
+NPBayesImputeCat::marginal_compare_all_syn(obsdata = survey,
+                                           syndata = survey_syn$syndata,
+                                           vars = "drug")
+```
+
+```{r eval = TRUE, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 4, fig.width = 4, echo=FALSE}
+NPBayesImputeCat::marginal_compare_all_syn(obsdata = survey,
+                                           syndata = survey_syn$syndata,
+                                           vars = "cann")
+```
+
+```{r eval = TRUE, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 4, fig.width = 4, echo=FALSE}
+NPBayesImputeCat::marginal_compare_all_syn(obsdata = survey,
+                                           syndata = survey_syn$syndata,
+                                           vars = "cash")
+```
+
+```{r message=FALSE, warning=FALSE, results='hide', size="footnotesize"}
+m <- 1
+utility_survey_syn <- NPBayesImputeCat::DPMPM_nozeros_syn(X = survey,
+                                                   dj = dj,
+                                                   nrun = 5000,
+                                                   burn = 500,
+                                                   thin = 10,
+                                                   K = 70,
+                                                   aalpha = 0.25,
+                                                   balpha = 0.25,
+                                                   m = m,
+                                                   vars = c("region", "alc", "drug", "cann", "cash"),
+                                                   seed = 221,
+                                                   silent = TRUE)
+```
+
+## Global Utility Evaluation (pMSE)
+```{r}
+n <- nrow(survey)
+merged_data <- rbind(survey, 
+                     survey_syn$syndata[[1]])
+merged_data$S <- c(rep(0, n), rep(1, n))
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+log_reg <- stats::glm(formula = S ~ (as.factor(age) + as.factor(gender) + as.factor(employ) +
+                        as.factor(race) + as.factor(educ) + as.factor(alc) + as.factor(drug) +
+                        as.factor(cann) + as.factor(cash) + as.factor(insurance) +
+                          as.factor(region))^2,
+                      family = "binomial", 
+                      data = merged_data)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+pred <- stats::predict(log_reg,
+                       newdata = merged_data)
+probs <- exp(pred) / (1 + exp(pred))
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+pMSE <- 1 / (2 * n) * sum((probs - 1 / 2)^2)
+pMSE
+```
+The calculated pMSE is small and close to 0, therefore, the logistic regression model cannot distinguish between the confidential and synthetic dataset, indicating a high level of utility of our synthetic dataset.
+
+Now we do this for the other 4 and calculate the overall average pMSE
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+merged_data2 <- rbind(survey, 
+                     survey_syn$syndata[[2]])
+merged_data2$S <- c(rep(0, n), rep(1, n))
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+log_reg2 <- stats::glm(formula = S ~ (as.factor(age) + as.factor(gender) + as.factor(employ) +
+                        as.factor(race) + as.factor(educ) + as.factor(alc) + as.factor(drug) +
+                        as.factor(cann) + as.factor(cash) + as.factor(insurance) +
+                          as.factor(region))^2,
+                      family = "binomial", 
+                      data = merged_data2)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+pred2 <- stats::predict(log_reg2,
+                       newdata = merged_data2)
+probs2 <- exp(pred2) / (1 + exp(pred2))
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+pMSE2 <- 1 / (2 * n) * sum((probs2 - 1 / 2)^2)
+pMSE2
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+merged_data3 <- rbind(survey, 
+                     survey_syn$syndata[[3]])
+merged_data3$S <- c(rep(0, n), rep(1, n))
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+log_reg3 <- stats::glm(formula = S ~ (as.factor(age) + as.factor(gender) + as.factor(employ) +
+                        as.factor(race) + as.factor(educ) + as.factor(alc) + as.factor(drug) +
+                        as.factor(cann) + as.factor(cash) + as.factor(insurance) +
+                          as.factor(region))^2,
+                      family = "binomial", 
+                      data = merged_data3)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+pred3 <- stats::predict(log_reg3,
+                       newdata = merged_data3)
+probs3 <- exp(pred3) / (1 + exp(pred3))
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+pMSE3 <- 1 / (2 * n) * sum((probs3 - 1 / 2)^2)
+pMSE3
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+merged_data4 <- rbind(survey, 
+                     survey_syn$syndata[[4]])
+merged_data4$S <- c(rep(0, n), rep(1, n))
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+log_reg4 <- stats::glm(formula = S ~ (as.factor(age) + as.factor(gender) + as.factor(employ) +
+                        as.factor(race) + as.factor(educ) + as.factor(alc) + as.factor(drug) +
+                        as.factor(cann) + as.factor(cash) + as.factor(insurance) +
+                          as.factor(region))^2,
+                      family = "binomial", 
+                      data = merged_data4)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+pred4 <- stats::predict(log_reg4,
+                       newdata = merged_data4)
+probs4 <- exp(pred4) / (1 + exp(pred4))
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+pMSE4 <- 1 / (2 * n) * sum((probs4 - 1 / 2)^2)
+pMSE4
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+merged_data5 <- rbind(survey, 
+                     survey_syn$syndata[[5]])
+merged_data5$S <- c(rep(0, n), rep(1, n))
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+log_reg5 <- stats::glm(formula = S ~ (as.factor(age) + as.factor(gender) + as.factor(employ) +
+                        as.factor(race) + as.factor(educ) + as.factor(alc) + as.factor(drug) +
+                        as.factor(cann) + as.factor(cash) + as.factor(insurance) +
+                          as.factor(region))^2,
+                      family = "binomial", 
+                      data = merged_data5)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+pred5 <- stats::predict(log_reg5,
+                       newdata = merged_data5)
+probs5 <- exp(pred5) / (1 + exp(pred5))
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+pMSE5 <- 1 / (2 * n) * sum((probs5 - 1 / 2)^2)
+pMSE5
+```
+
+```{r}
+(pMSE+pMSE2+pMSE3+pMSE4+pMSE5)/5
+```
+
+The average pMSE is small and close to 0 meaning the logistic regression cannot distinguish between the confidential and synthetic datasets, indicating a high level of utility of our synthetic datasets.
+```{r}
+merged_data
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+library(RSNNS)
+library(caret)
+```
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+#use merged_data
+#shuffle the vector
+data <- merged_data[sample(1:nrow(merged_data),length(1:nrow(merged_data))),1:ncol(merged_data)]
+
+dummy <- dummyVars(" ~ .", data = data)
+survey_mlp <- data.frame(predict(dummy, newdata = data ))
+
+surveyValues <- survey_mlp[,1:11]
+
+surveyTargets <- decodeClassLabels(survey_mlp[,12])
+
+train_ind <- sample(seq_len(nrow(survey_mlp)), size = smp_size)
+
+train <- survey_mlp[train_ind, ]
+
+train_x <- train[,1:11]
+train_y <- train[,12]
+
+test <- survey_mlp[-train_ind, ]
+test_x <- test[,1:11]
+test_y <- test[,12]
+
+# TRY CHANGING SPLIT FUNCTION
+survey_mlp <- splitForTrainingAndTest(surveyValues, surveyTargets, ratio=0.15)
+```
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+model <- mlp(train_x, 
+             train_y, 
+             size = c(10, 5), 
+             initFunc = "Randomize_Weights",
+             initFuncParams = c(-0.3, 0.3),
+             learnFuncParams=c(0.1, 0),
+             learnFunc = "Rprop",
+             maxit = 100)
+
+```
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+pred <- stats::predict(model, newdata = test_x)
+probs <- exp(pred) / (1 + exp(pred))
+pMSE <- 1 / (2 * n) * sum((probs - 1 / 2)^2)
+pMSE
+
+```
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+merged_data2 <- rbind(survey, 
+                     survey_syn$syndata[[2]])
+merged_data2$S <- c(rep(0, n), rep(1, n))
+
+```
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+set.seed(1)
+#use merged_data
+#shuffle the vector
+data2 <- merged_data2[sample(1:nrow(merged_data2),length(1:nrow(merged_data2))),1:ncol(merged_data2)]
+
+dummy2 <- dummyVars(" ~ .", data = data2)
+survey_mlp2 <- data.frame(predict(dummy2, newdata = data2 ))
+
+surveyValues2 <- survey_mlp2[,1:11]
+
+surveyTargets2 <- decodeClassLabels(survey_mlp2[,12])
+
+train_ind2 <- sample(seq_len(nrow(survey_mlp2)), size = smp_size)
+
+train2 <- survey_mlp2[train_ind2, ]
+
+train_x2 <- train2[,1:11]
+train_y2 <- train2[,12]
+
+test2 <- survey_mlp2[-train_ind2, ]
+test_x2 <- test2[,1:11]
+test_y2 <- test2[,12]
+
+survey_mlp2 <- splitForTrainingAndTest(surveyValues2, surveyTargets2, ratio=0.15)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+set.seed(12)
+model2 <- mlp(train_x2, 
+             train_y2, 
+             size = c(10, 5), 
+             initFunc = "Randomize_Weights",
+             initFuncParams = c(-0.3, 0.3),
+             learnFuncParams=c(0.1, 0),
+             learnFunc = "Rprop",
+             maxit = 100)
+
+
+
+```
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+pred2 <- stats::predict(model2, newdata = test_x2)
+probs2 <- exp(pred2) / (1 + exp(pred2))
+pMSE2 <- 1 / (2 * n) * sum((probs2 - 1 / 2)^2)
+pMSE2
+
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+#use merged_data
+#shuffle the vector
+set.seed(123)
+data3 <- merged_data3[sample(1:nrow(merged_data3),length(1:nrow(merged_data3))),1:ncol(merged_data3)]
+
+dummy3 <- dummyVars(" ~ .", data = data3)
+survey_mlp3 <- data.frame(predict(dummy3, newdata = data3 ))
+
+surveyValues3 <- survey_mlp3[,1:11]
+
+surveyTargets3 <- decodeClassLabels(survey_mlp3[,12])
+
+survey_mlp3 <- splitForTrainingAndTest(surveyValues3, surveyTargets3, ratio=0.15)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+set.seed(2)
+model3 <- mlp(survey_mlp3$inputsTrain, 
+             survey_mlp3$targetsTrain, 
+             size = c(10, 5), 
+             initFunc = "Randomize_Weights",
+             initFuncParams = c(-0.3, 0.3),
+             learnFuncParams=c(0.1, 0),
+             learnFunc = "Rprop",
+             maxit = 100, 
+             inputsTest=survey_mlp3$inputsTest, 
+             targetsTest=survey_mlp3$targetsTest)
+
+
+
+```
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+set.seed(23)
+pred3 <- stats::predict(model3, newdata = survey_mlp3$inputsTest)
+probs3 <- exp(pred3) / (1 + exp(pred3))
+pMSE3 <- 1 / (2 * n) * sum((probs3 - 1 / 2)^2)
+pMSE3
+
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+#use merged_data
+#shuffle the vector
+set.seed(234)
+data4 <- merged_data4[sample(1:nrow(merged_data4),length(1:nrow(merged_data4))),1:ncol(merged_data4)]
+
+dummy4 <- dummyVars(" ~ .", data = data4)
+survey_mlp4 <- data.frame(predict(dummy4, newdata = data4 ))
+
+surveyValues4 <- survey_mlp4[,1:11]
+
+surveyTargets4 <- decodeClassLabels(survey_mlp4[,12])
+
+survey_mlp4 <- splitForTrainingAndTest(surveyValues4, surveyTargets4, ratio=0.15)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+set.seed(3)
+model4 <- mlp(survey_mlp4$inputsTrain, 
+             survey_mlp4$targetsTrain, 
+             size = c(10, 5), 
+             initFunc = "Randomize_Weights",
+             initFuncParams = c(-0.3, 0.3),
+             learnFuncParams=c(0.1, 0),
+             learnFunc = "Rprop",
+             maxit = 100, 
+             inputsTest=survey_mlp4$inputsTest, 
+             targetsTest=survey_mlp4$targetsTest)
+
+
+```
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+set.seed(34)
+pred4 <- stats::predict(model4, newdata = survey_mlp4$inputsTest)
+probs4 <- exp(pred4) / (1 + exp(pred4))
+pMSE4 <- 1 / (2 * n) * sum((probs4 - 1 / 2)^2)
+pMSE4
+
+```
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+#use merged_data
+#shuffle the vector
+set.seed(345)
+data5 <- merged_data5[sample(1:nrow(merged_data5),length(1:nrow(merged_data5))),1:ncol(merged_data5)]
+
+dummy5 <- dummyVars(" ~ .", data = data5)
+survey_mlp5 <- data.frame(predict(dummy5, newdata = data5 ))
+
+surveyValues5 <- survey_mlp5[,1:11]
+
+surveyTargets5 <- decodeClassLabels(survey_mlp5[,12])
+
+survey_mlp5 <- splitForTrainingAndTest(surveyValues5, surveyTargets5, ratio=0.15)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+set.seed(4)
+model5 <- mlp(survey_mlp5$inputsTrain, 
+             survey_mlp5$targetsTrain, 
+             size = c(10, 5), 
+             initFunc = "Randomize_Weights",
+             initFuncParams = c(-0.3, 0.3),
+             learnFuncParams=c(0.1, 0),
+             learnFunc = "Rprop",
+             maxit = 100, 
+             inputsTest=survey_mlp5$inputsTest, 
+             targetsTest=survey_mlp5$targetsTest)
+
+
+```
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+set.seed(45)
+pred5 <- stats::predict(model5, newdata = survey_mlp5$inputsTest)
+probs5 <- exp(pred5) / (1 + exp(pred5))
+pMSE5 <- 1 / (2 * n) * sum((probs5 - 1 / 2)^2)
+pMSE5
+
+```
+
+```{r}
+(pMSE+pMSE2+pMSE3+pMSE4+pMSE5)/5
+
+```
+
+
+
+
+
+

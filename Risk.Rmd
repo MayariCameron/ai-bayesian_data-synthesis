@@ -1,0 +1,352 @@
+---
+title: "Risk"
+author: "Cameron Flores"
+date: "11/20/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(qwraps2)
+library(knitr)
+library(ggplot2)
+library(productplots)
+library(brms)
+library(bayesplot)
+library(NPBayesImputeCat)
+library(RSNNS)
+library(caret)
+library(FNN)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Inputs: age, gender, race, region, education, insurance, employment status
+Output: alcohol, drug, cannabis, cash
+
+
+```{r setup, include=FALSE}
+survey_csv <- data.frame(readr::read_csv(file = "survey.csv"))
+
+survey_csv <- survey_csv %>%
+select("age", "gender", "race", "employ", "educ", "alc", "drug", "cann", "cash", "insurance", "region")
+
+survey_csv$age[survey_csv$age==1] <- 2
+survey_csv$age[survey_csv$age==0] <- 1
+
+survey_csv$gender[survey_csv$gender==1] <- 2
+survey_csv$gender[survey_csv$gender==0] <- 1
+
+survey_csv$alc[survey_csv$alc==1] <- 2
+survey_csv$alc[survey_csv$alc==0] <- 1
+
+survey_csv$drug[survey_csv$drug==1] <- 2
+survey_csv$drug[survey_csv$drug==0] <- 1
+
+survey_csv$cann[survey_csv$cann==1] <- 2
+survey_csv$cann[survey_csv$cann==0] <- 1
+
+survey_csv$cash[survey_csv$cash==1] <- 2
+survey_csv$cash[survey_csv$cash==0] <- 1
+
+survey_csv$insurance[survey_csv$insurance==1] <- 2
+survey_csv$insurance[survey_csv$insurance==0] <- 1
+
+survey_csv$age <- as.factor(survey_csv$age)
+survey_csv$gender <- as.factor(survey_csv$gender)
+survey_csv$alc <- as.factor(survey_csv$alc)
+survey_csv$drug <- as.factor(survey_csv$drug)
+survey_csv$cann <- as.factor(survey_csv$cann)
+survey_csv$cash <- as.factor(survey_csv$cash)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+dj <- c(2, 2, 4, 5, 6, 2, 2, 2, 2, 2, 5)
+r <- ncol(survey_csv)
+# make sure all variables are categorical
+temp_survey_csv <- survey_csv
+for (j in 1:r){
+  temp_survey_csv[, j] <- factor(survey_csv[, j], levels = 1:dj[j])
+}
+
+#select random sample of three rows from data frame
+survey <- temp_survey_csv[sample(1:nrow(survey_csv), 5000), ]
+```
+
+```{r size = "footnotesize", results = 'hide', message = FALSE, warning = FALSE}
+model <- NPBayesImputeCat::CreateModel(X = survey,
+                                       MCZ = NULL,
+                                       K = 70,
+                                       Nmax = 0,
+                                       aalpha = 0.25,
+                                       balpha = 0.25,
+                                       seed = 221)
+```
+
+```{r message=FALSE, warning=FALSE, results='hide', size="footnotesize"}
+m <- 5
+survey_syn <- NPBayesImputeCat::DPMPM_nozeros_syn(X = survey,
+                                                   dj = dj,
+                                                   nrun = 5000,
+                                                   burn = 500,
+                                                   thin = 10,
+                                                   K = 70,
+                                                   aalpha = 0.25,
+                                                   balpha = 0.25,
+                                                   m = m,
+                                                   vars = c("region", "alc", "drug", "cann", "cash"),
+                                                   seed = 221,
+                                                   silent = TRUE)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+#use merged_data
+#shuffle the vector
+data <- survey[sample(1:nrow(survey),length(1:nrow(survey))),1:ncol(survey)]
+
+dummy <- dummyVars(" ~ .", data = data)
+
+survey <- data.frame(predict(dummy, newdata = data ))
+
+
+data_syn <- survey_syn$syndata[[1]][sample(1:nrow(survey_syn$syndata[[1]]),length(1:nrow(survey_syn$syndata[[1]]))),1:ncol(survey_syn$syndata[[1]])]
+
+dummy_syn <- dummyVars(" ~ .", data = data_syn)
+
+survey_syn_data <- data.frame(predict(dummy_syn, newdata = data_syn ))
+
+```
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+con_train <- survey[, c("age.1", "age.2",
+                                                    "gender.1", "gender.2",
+                                                    "race.1","race.2","race.3","race.4")]
+syn_train <- survey_syn_data[, c("age.1", "age.2",
+                                                    "gender.1", "gender.2",
+                                                    "race.1","race.2","race.3","race.4")]
+test <- survey[, c("age.1", "age.2",
+                                                    "gender.1", "gender.2",
+                                                    "race.1","race.2","race.3","race.4")]
+con_y <- survey[, c("alc.1","alc.2",
+               "drug.1","drug.2",
+               "cann.1","cann.2",
+               "cash.1","cash.2",
+               "region.1","region.2","region.3","region.4","region.5")]
+
+syn_y <- survey_syn_data[, c("alc.1","alc.2",
+               "drug.1","drug.2",
+               "cann.1","cann.2",
+               "cash.1","cash.2",
+               "region.1","region.2","region.3","region.4","region.5")]
+
+```
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+kNN_pred_con <- FNN::knn.reg(train = con_train,
+test = test,
+y = con_y)
+
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+kNN_pred_syn <- FNN::knn.reg(train = syn_train,
+test = test,
+y = syn_y)
+
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+kNN_syn_sum <- (survey$alc.1 - kNN_pred_syn$pred)^2 +
+       (survey$alc.2 - kNN_pred_syn$pred)^2 +
+       (survey$drug.1 - kNN_pred_syn$pred)^2 +
+       (survey$drug.2 - kNN_pred_syn$pred)^2 +
+       (survey$cann.1 - kNN_pred_syn$pred)^2 +
+       (survey$cann.2 - kNN_pred_syn$pred)^2 +
+       (survey$cash.1 - kNN_pred_syn$pred)^2 +
+       (survey$cash.2 - kNN_pred_syn$pred)^2 +
+       (survey$region.1 - kNN_pred_syn$pred)^2 +
+       (survey$region.2 - kNN_pred_syn$pred)^2 +
+       (survey$region.3 - kNN_pred_syn$pred)^2 +
+       (survey$region.4 - kNN_pred_syn$pred)^2 +
+       (survey$region.5 - kNN_pred_syn$pred)^2
+  
+kNN_MSE_syn <- mean(kNN_syn_sum)
+kNN_MSE_syn
+
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+kNN_con_sum <- (survey$alc.1 - kNN_pred_con$pred)^2 +
+       (survey$alc.2 - kNN_pred_con$pred)^2 +
+       (survey$drug.1 - kNN_pred_con$pred)^2 +
+       (survey$drug.2 - kNN_pred_con$pred)^2 +
+       (survey$cann.1 - kNN_pred_con$pred)^2 +
+       (survey$cann.2 - kNN_pred_con$pred)^2 +
+       (survey$cash.1 - kNN_pred_con$pred)^2 +
+       (survey$cash.2 - kNN_pred_con$pred)^2  +
+       (survey$region.1 - kNN_pred_con$pred)^2 +
+       (survey$region.2 - kNN_pred_con$pred)^2 +
+       (survey$region.3 - kNN_pred_con$pred)^2 +
+       (survey$region.4 - kNN_pred_con$pred)^2 +
+       (survey$region.5 - kNN_pred_con$pred)^2
+
+kNN_MSE_con <- mean(kNN_con_sum)
+kNN_MSE_con
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+library(RSNNS)
+library(caret)
+```
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+con_model <- mlp(con_train, 
+             con_y, 
+             size = c(10, 5), 
+             initFunc = "Randomize_Weights",
+             initFuncParams = c(-0.3, 0.3),
+             learnFuncParams=c(0.1, 0),
+             learnFunc = "Rprop",
+             maxit = 100)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+con_pred <- stats::predict(con_model, newdata = test)
+con_pred <- as.data.frame(con_pred)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+mlp_sum <- (survey$alc.1 - con_pred$V1)^2 +
+       (survey$alc.2 - con_pred$V2)^2 +
+       (survey$drug.1 - con_pred$V3)^2 +
+       (survey$drug.2 - con_pred$V4)^2 +
+       (survey$cann.1 - con_pred$V5)^2 +
+       (survey$cann.2 - con_pred$V6)^2 +
+       (survey$cash.1 - con_pred$V7)^2 +
+       (survey$cash.2 - con_pred$V8)^2 +
+       (survey$region.1 - con_pred$V9)^2 +
+       (survey$region.2 - con_pred$V10)^2 +
+       (survey$region.3 - con_pred$V11)^2 +
+       (survey$region.4 - con_pred$V12)^2 +
+       (survey$region.5 - con_pred$V13)^2
+  
+mlp_con <- mean(mlp_sum)
+mlp_con
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+syn_model <- mlp(syn_train, 
+             syn_y, 
+             size = c(10, 5), 
+             initFunc = "Randomize_Weights",
+             initFuncParams = c(-0.3, 0.3),
+             learnFuncParams=c(0.1, 0),
+             learnFunc = "Rprop",
+             maxit = 100)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+syn_pred <- stats::predict(syn_model, newdata = test)
+syn_pred <- as.data.frame(syn_pred)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+mlp_sum_syn <- (survey$alc.1 - syn_pred$V1)^2 +
+       (survey$alc.2 - syn_pred$V2)^2 +
+       (survey$drug.1 - syn_pred$V3)^2 +
+       (survey$drug.2 - syn_pred$V4)^2 +
+       (survey$cann.1 - syn_pred$V5)^2 +
+       (survey$cann.2 - syn_pred$V6)^2 +
+       (survey$cash.1 - syn_pred$V7)^2 +
+       (survey$cash.2 - syn_pred$V8)^2 +
+       (survey$region.1 - syn_pred$V9)^2 +
+       (survey$region.2 - syn_pred$V10)^2 +
+       (survey$region.3 - syn_pred$V11)^2 +
+       (survey$region.4 - syn_pred$V12)^2 +
+       (survey$region.5 - syn_pred$V13)^2
+  
+  
+mlp_syn <- mean(mlp_sum_syn)
+mlp_syn
+
+```
+
+The larger the MSE the larger the error but as you can see, they are relatively the same.
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+survey$age.1[survey$age.1==1] <- 2
+survey$age.1[survey$age.1==0] <- 1
+
+survey$age.2[survey$age.2==1] <- 2
+survey$age.2[survey$age.2==0] <- 1
+
+survey$gender.1[survey$gender.1==1] <- 2
+survey$gender.1[survey$gender.1==0] <- 1
+
+survey$gender.2[survey$gender.2==1] <- 2
+survey$gender.2[survey$gender.2==0] <- 1
+
+survey$alc.1[survey$alc.1==1] <- 2
+survey$alc.1[survey$alc.1==0] <- 1
+
+survey$alc.2[survey$alc.2==1] <- 2
+survey$alc.2[survey$alc.2==0] <- 1
+
+survey$drug.1[survey$drug.1==1] <- 2
+survey$drug.1[survey$drug.1==0] <- 1
+
+survey$drug.2[survey$drug.2==1] <- 2
+survey$drug.2[survey$drug.2==0] <- 1
+
+survey$cann.1[survey$cann.1==1] <- 2
+survey$cann.1[survey$cann.1==0] <- 1
+
+survey$cann.2[survey$cann.2==1] <- 2
+survey$cann.2[survey$cann.2==0] <- 1
+
+survey$cash.1[survey$cash.1==1] <- 2
+survey$cash.1[survey$cash.1==0] <- 1
+
+survey$cash.2[survey$cash.2==1] <- 2
+survey$cash.2[survey$cash.2==0] <- 1
+
+
+relative_error_syn <- (abs(survey$alc.1 - kNN_pred_syn$pred)/survey$alc.1) + 
+  (abs(survey$alc.2 - kNN_pred_syn$pred)/survey$alc.2) + 
+  (abs(survey$drug.1 - kNN_pred_syn$pred)/survey$drug.1) +
+  (abs(survey$drug.2 - kNN_pred_syn$pred)/survey$drug.2) +
+  (abs(survey$cann.1 - kNN_pred_syn$pred)/survey$cann.1) +
+  (abs(survey$cann.2 - kNN_pred_syn$pred)/survey$cann.2) +
+  (abs(survey$cash.1 - kNN_pred_syn$pred)/survey$cash.1) +
+  (abs(survey$cash.2 - kNN_pred_syn$pred)/survey$cash.2) 
+
+relative_error_con <- (abs(survey$alc.1 - kNN_pred_con$pred)/survey$alc.1) + 
+  (abs(survey$alc.2 - kNN_pred_con$pred)/survey$alc.2) + 
+  (abs(survey$drug.1 - kNN_pred_con$pred)/survey$drug.1) +
+  (abs(survey$drug.2 - kNN_pred_con$pred)/survey$drug.2) +
+  (abs(survey$cann.1 - kNN_pred_con$pred)/survey$cann.1) +
+  (abs(survey$cann.2 - kNN_pred_con$pred)/survey$cann.2) +
+  (abs(survey$cash.1 - kNN_pred_con$pred)/survey$cash.1) +
+  (abs(survey$cash.2 - kNN_pred_con$pred)/survey$cash.2) 
+
+mean(relative_error_con > relative_error_syn)
+
+```
+
+We returned the proportion if observations that will have a less accuracte prediction with the synthetic data compared to with the confidential data
+
+
+
+
+
+
