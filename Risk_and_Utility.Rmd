@@ -1,0 +1,518 @@
+---
+title: "Risk and Utility"
+author: "Cameron Flores"
+date: "12/1/2021"
+output: pdf_document
+---
+
+
+```{r }
+library(tidyverse)
+library(qwraps2)
+library(knitr)
+library(ggplot2)
+library(productplots)
+library(brms)
+library(bayesplot)
+library(NPBayesImputeCat)
+library(RSNNS)
+library(caret)
+library(FNN)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Inputs: age, gender, race, region, education, insurance, employment status
+Output: alcohol, drug, cannabis, cash
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+survey_csv <- data.frame(readr::read_csv(file = "survey.csv"))
+
+survey_csv <- survey_csv %>%
+select("age", "gender", "race", "employ", "educ", "alc", "drug", "cann", "cash", "insurance", "region")
+
+survey_csv$age[survey_csv$age==1] <- 2
+survey_csv$age[survey_csv$age==0] <- 1
+
+survey_csv$gender[survey_csv$gender==1] <- 2
+survey_csv$gender[survey_csv$gender==0] <- 1
+
+survey_csv$alc[survey_csv$alc==1] <- 2
+survey_csv$alc[survey_csv$alc==0] <- 1
+
+survey_csv$drug[survey_csv$drug==1] <- 2
+survey_csv$drug[survey_csv$drug==0] <- 1
+
+survey_csv$cann[survey_csv$cann==1] <- 2
+survey_csv$cann[survey_csv$cann==0] <- 1
+
+survey_csv$cash[survey_csv$cash==1] <- 2
+survey_csv$cash[survey_csv$cash==0] <- 1
+
+survey_csv$insurance[survey_csv$insurance==1] <- 2
+survey_csv$insurance[survey_csv$insurance==0] <- 1
+
+survey_csv$age <- as.factor(survey_csv$age)
+survey_csv$gender <- as.factor(survey_csv$gender)
+survey_csv$alc <- as.factor(survey_csv$alc)
+survey_csv$drug <- as.factor(survey_csv$drug)
+survey_csv$cann <- as.factor(survey_csv$cann)
+survey_csv$cash <- as.factor(survey_csv$cash)
+
+dj <- c(2, 2, 4, 5, 6, 2, 2, 2, 2, 2, 5)
+r <- ncol(survey_csv)
+# make sure all variables are categorical
+temp_survey_csv <- survey_csv
+for (j in 1:r){
+  temp_survey_csv[, j] <- factor(survey_csv[, j], levels = 1:dj[j])
+}
+
+survey <- (temp_survey_csv[sample(1:nrow(survey_csv), 5000), ])
+
+```
+
+```{r size = "footnotesize", results = 'hide', message = FALSE, warning = FALSE}
+model <- NPBayesImputeCat::CreateModel(X = survey,
+                                       MCZ = NULL,
+                                       K = 70,
+                                       Nmax = 0,
+                                       aalpha = 0.25,
+                                       balpha = 0.25,
+                                       seed = 225)
+```
+
+```{r message=FALSE, warning=FALSE, results='hide', size="footnotesize"}
+m <- 5
+survey_syn <- NPBayesImputeCat::DPMPM_nozeros_syn(X = survey,
+                                                   dj = dj,
+                                                   nrun = 5000,
+                                                   burn = 500,
+                                                   thin = 10,
+                                                   K = 70,
+                                                   aalpha = 0.25,
+                                                   balpha = 0.25,
+                                                   m = m,
+                                                   vars = c("region", "alc", "drug", "cann", "cash"),
+                                                   seed = 225,
+                                                   silent = TRUE)
+```
+
+
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+data <- survey[sample(1:nrow(survey),length(1:nrow(survey))),1:ncol(survey)]
+
+dummy <- dummyVars(" ~ .", data = data)
+
+con_survey <- data.frame(predict(dummy, newdata = data ))
+
+con_train <- con_survey[, c("age.1", "age.2",
+                        "gender.1", "gender.2",
+                        "race.1","race.2","race.3","race.4")]
+
+test <- con_survey[, c("age.1", "age.2",
+                   "gender.1", "gender.2",
+                   "race.1","race.2","race.3","race.4")]
+
+con_y <- con_survey[, c("alc.1","alc.2",
+               "drug.1","drug.2",
+               "cann.1","cann.2",
+               "cash.1","cash.2",
+               "region.1","region.2","region.3","region.4","region.5")]
+
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+#use merged_data
+#shuffle the vector
+
+hot_encode_and_split <- function(i){
+
+  data_syn <- survey_syn$syndata[[i]][sample(1:nrow(survey_syn$syndata[[i]]),length(1:nrow(survey_syn$syndata[[i]]))),1:ncol(survey_syn$syndata[[i]])]
+  
+  dummy_syn <- dummyVars(" ~ .", data = data_syn)
+  survey_syn_data <- (data.frame(predict(dummy_syn, newdata = data_syn)))
+  
+  return (survey_syn_data + 1)
+  
+}
+
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+knn_MSE <- function(train_data, test_data, y_data){
+  
+knn_pred <- FNN::knn.reg(train = train_data,
+test = test_data,
+y = y_data)
+  
+kNN_sum <- (con_survey$alc.1 - knn_pred$pred)^2 +
+       (con_survey$alc.2 - knn_pred$pred)^2 +
+       (con_survey$drug.1 - knn_pred$pred)^2 +
+       (con_survey$drug.2 - knn_pred$pred)^2 +
+       (con_survey$cann.1 - knn_pred$pred)^2 +
+       (con_survey$cann.2 - knn_pred$pred)^2 +
+       (con_survey$cash.1 - knn_pred$pred)^2 +
+       (con_survey$cash.2 - knn_pred$pred)^2 +
+       (con_survey$region.1 - knn_pred$pred)^2 +
+       (con_survey$region.2 - knn_pred$pred)^2 +
+       (con_survey$region.3 - knn_pred$pred)^2 +
+       (con_survey$region.4 - knn_pred$pred)^2 +
+       (con_survey$region.5 - knn_pred$pred)^2
+  
+MSE <- mean(kNN_sum)
+return (MSE)
+  
+}
+
+```
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+kNN_MSE_con <- knn_MSE(con_train,test,con_y)
+kNN_MSE_con
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+kNN_MSE_syns <- rep(0,5)
+for(i in 1:m){
+  survey_syn_data <- hot_encode_and_split(i)
+  
+  syn_train <- survey_syn_data[, c("age.1", "age.2",
+                                   "gender.1", "gender.2",
+                                   "race.1","race.2","race.3","race.4")]
+  
+  syn_y <- survey_syn_data[, c("alc.1","alc.2",
+                 "drug.1","drug.2",
+                 "cann.1","cann.2",
+                 "cash.1","cash.2",
+                 "region.1","region.2","region.3","region.4","region.5")]
+  
+  kNN_MSE_syns[i] <- knn_MSE(syn_train, test, syn_y)
+}
+
+mean(kNN_MSE_syns)
+
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+library(RSNNS)
+library(caret)
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+mlp_MSE <- function(train_data, test_data, y_data){
+  
+model <-     mlp(train_data, 
+             y_data, 
+             size = c(10, 5), 
+             initFunc = "Randomize_Weights",
+             initFuncParams = c(-0.3, 0.3),
+             learnFuncParams=c(0.1, 0),
+             learnFunc = "Rprop",
+             maxit = 100)
+
+pred <- stats::predict(model, newdata = test_data)
+pred <- as.data.frame(pred)  
+
+mlp_sum <- (con_survey$alc.1 - pred$V1)^2 +
+       (con_survey$alc.2 - pred$V2)^2 +
+       (con_survey$drug.1 - pred$V3)^2 +
+       (con_survey$drug.2 - pred$V4)^2 +
+       (con_survey$cann.1 - pred$V5)^2 +
+       (con_survey$cann.2 -pred$V6)^2 +
+       (con_survey$cash.1 - pred$V7)^2 +
+       (con_survey$cash.2 - pred$V8)^2 +
+       (con_survey$region.1 - pred$V9)^2 +
+       (con_survey$region.2 - pred$V10)^2 +
+       (con_survey$region.3 - pred$V11)^2 +
+       (con_survey$region.4 - pred$V12)^2 +
+       (con_survey$region.5 - pred$V13)^2
+  
+MSE <- mean(mlp_sum)
+return (MSE)
+  
+}
+
+```
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+  
+mlp_con <- mlp_MSE(con_train, test, con_y)
+mlp_con
+```
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+mlp_MSE_syns <- rep(0,5)
+for(i in 1:m){
+  survey_syn_data <- hot_encode_and_split(i)
+  
+  syn_train <- survey_syn_data[, c("age.1", "age.2",
+                                   "gender.1", "gender.2",
+                                   "race.1","race.2","race.3","race.4")]
+  
+  syn_y <- survey_syn_data[, c("alc.1","alc.2",
+                 "drug.1","drug.2",
+                 "cann.1","cann.2",
+                 "cash.1","cash.2",
+                 "region.1","region.2","region.3","region.4","region.5")]
+  
+  mlp_MSE_syns[i] <- mlp_MSE(syn_train, test, syn_y)
+}
+
+mean(mlp_MSE_syns)
+
+```
+
+The larger the MSE the larger the error but as you can see, they are relatively the same.
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+
+kNN_pred_con <- FNN::knn.reg(train = con_train,
+test = test,
+y = con_y)
+
+
+knn_re <- function(train_data, test_data, y_data){
+  
+kNN_pred_syn <- FNN::knn.reg(train = train_data,
+test = test_data,
+y = y_data)
+  
+
+relative_error_syn <- (abs(con_survey$alc.1 - kNN_pred_syn$pred)/con_survey$alc.1) + 
+  (abs(con_survey$alc.2 - kNN_pred_syn$pred)/con_survey$alc.2) + 
+  (abs(con_survey$drug.1 - kNN_pred_syn$pred)/con_survey$drug.1) +
+  (abs(con_survey$drug.2 - kNN_pred_syn$pred)/con_survey$drug.2) +
+  (abs(con_survey$cann.1 - kNN_pred_syn$pred)/con_survey$cann.1) +
+  (abs(con_survey$cann.2 - kNN_pred_syn$pred)/con_survey$cann.2) +
+  (abs(con_survey$cash.1 - kNN_pred_syn$pred)/con_survey$cash.1) +
+  (abs(con_survey$cash.2 - kNN_pred_syn$pred)/con_survey$cash.2) +
+  (abs(con_survey$region.1 - kNN_pred_syn$pred)/con_survey$region.1) +
+  (abs(con_survey$region.2 - kNN_pred_syn$pred)/con_survey$region.2) +
+  (abs(con_survey$region.3 - kNN_pred_syn$pred)/con_survey$region.3) +
+  (abs(con_survey$region.4 - kNN_pred_syn$pred)/con_survey$region.4) +
+  (abs(con_survey$region.5 - kNN_pred_syn$pred)/con_survey$region.5) 
+
+relative_error_con <- (abs(con_survey$alc.1 - kNN_pred_con$pred)/con_survey$alc.1) + 
+  (abs(con_survey$alc.2 - kNN_pred_con$pred)/con_survey$alc.2) + 
+  (abs(con_survey$drug.1 - kNN_pred_con$pred)/con_survey$drug.1) +
+  (abs(con_survey$drug.2 - kNN_pred_con$pred)/con_survey$drug.2) +
+  (abs(con_survey$cann.1 - kNN_pred_con$pred)/con_survey$cann.1) +
+  (abs(con_survey$cann.2 - kNN_pred_con$pred)/con_survey$cann.2) +
+  (abs(con_survey$cash.1 - kNN_pred_con$pred)/con_survey$cash.1) +
+  (abs(con_survey$cash.2 - kNN_pred_con$pred)/con_survey$cash.2) +
+  (abs(con_survey$region.1 - kNN_pred_syn$pred)/con_survey$region.1) +
+  (abs(con_survey$region.2 - kNN_pred_syn$pred)/con_survey$region.2) +
+  (abs(con_survey$region.3 - kNN_pred_syn$pred)/con_survey$region.3) +
+  (abs(con_survey$region.4 - kNN_pred_syn$pred)/con_survey$region.4) +
+  (abs(con_survey$region.5 - kNN_pred_syn$pred)/con_survey$region.5) 
+  
+re <- mean(relative_error_con > relative_error_syn)
+return (re)
+  
+}
+
+kNN_re_syns <- rep(0,5)
+for(i in 1:m){
+  survey_syn_data <- hot_encode_and_split(i)
+  
+  syn_train <- survey_syn_data[, c("age.1", "age.2",
+                                   "gender.1", "gender.2",
+                                   "race.1","race.2","race.3","race.4")]
+  
+  syn_y <- survey_syn_data[, c("alc.1","alc.2",
+                 "drug.1","drug.2",
+                 "cann.1","cann.2",
+                 "cash.1","cash.2",
+                 "region.1","region.2","region.3","region.4","region.5")]
+  
+  kNN_re_syns[i] <- knn_re(syn_train, test, syn_y)
+}
+
+mean(kNN_re_syns)
+
+
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+mlp_con_model <- mlp(con_train, 
+             con_y, 
+             size = c(5, 3), 
+             initFunc = "Randomize_Weights",
+             initFuncParams = c(-0.3, 0.3),
+             learnFuncParams=c(0.1, 0),
+             learnFunc = "Rprop",
+             maxit = 100)
+
+mlp_pred_con <- stats::predict(mlp_con_model, newdata = test)
+mlp_pred_con <- as.data.frame(mlp_pred_con) 
+
+mlp_re <- function(train_data, test_data, y_data){
+  
+mlp_syn_model <- mlp(train_data, 
+             y_data, 
+             size = c(5, 3), 
+             initFunc = "Randomize_Weights",
+             initFuncParams = c(-0.3, 0.3),
+             learnFuncParams=c(0.1, 0),
+             learnFunc = "Rprop",
+             maxit = 100)
+  
+mlp_pred_syn <- stats::predict(mlp_syn_model, newdata = test_data)
+mlp_pred_syn <- as.data.frame(mlp_pred_syn) 
+
+relative_error_syn <- (abs(con_survey$alc.1 - mlp_pred_syn$V1)/con_survey$alc.1) + 
+  (abs(con_survey$alc.2 - mlp_pred_syn$V2)/con_survey$alc.2) + 
+  (abs(con_survey$drug.1 - mlp_pred_syn$V3)/con_survey$drug.1) +
+  (abs(con_survey$drug.2 - mlp_pred_syn$V4)/con_survey$drug.2) +
+  (abs(con_survey$cann.1 - mlp_pred_syn$V5)/con_survey$cann.1) +
+  (abs(con_survey$cann.2 - mlp_pred_syn$V6)/con_survey$cann.2) +
+  (abs(con_survey$cash.1 - mlp_pred_syn$V7)/con_survey$cash.1) +
+  (abs(con_survey$cash.2 - mlp_pred_syn$V8)/con_survey$cash.2) +
+  (abs(con_survey$region.1 - mlp_pred_syn$V9)/con_survey$region.1) +
+  (abs(con_survey$region.2 - mlp_pred_syn$V10)/con_survey$region.2) +
+  (abs(con_survey$region.3 - mlp_pred_syn$V11)/con_survey$region.3) +
+  (abs(con_survey$region.4 - mlp_pred_syn$V12)/con_survey$region.4) +
+  (abs(con_survey$region.5 - mlp_pred_syn$V13)/con_survey$region.5) 
+
+relative_error_con <- (abs(con_survey$alc.1 - mlp_pred_con$V1)/con_survey$alc.1) + 
+  (abs(con_survey$alc.2 - mlp_pred_con$V2)/con_survey$alc.2) + 
+  (abs(con_survey$drug.1 - mlp_pred_con$V3)/con_survey$drug.1) +
+  (abs(con_survey$drug.2 - mlp_pred_con$V4)/con_survey$drug.2) +
+  (abs(con_survey$cann.1 - mlp_pred_con$V5)/con_survey$cann.1) +
+  (abs(con_survey$cann.2 - mlp_pred_con$V6)/con_survey$cann.2) +
+  (abs(con_survey$cash.1 - mlp_pred_con$V7)/con_survey$cash.1) +
+  (abs(con_survey$cash.2 - mlp_pred_con$V8)/con_survey$cash.2) +
+  (abs(con_survey$region.1 - mlp_pred_con$V9)/con_survey$region.1) +
+  (abs(con_survey$region.2 - mlp_pred_con$V10)/con_survey$region.2) +
+  (abs(con_survey$region.3 - mlp_pred_con$V11)/con_survey$region.3) +
+  (abs(con_survey$region.4 - mlp_pred_con$V12)/con_survey$region.4) +
+  (abs(con_survey$region.5 - mlp_pred_con$V13)/con_survey$region.5) 
+  
+re <- mean(relative_error_con > relative_error_syn)
+
+return (re)
+  
+}
+
+mlp_re_syns <- rep(0,5)
+for(i in 1:m){
+  survey_syn_data <- hot_encode_and_split(i)
+  
+  syn_train <- survey_syn_data[, c("age.1", "age.2",
+                                   "gender.1", "gender.2",
+                                   "race.1","race.2","race.3","race.4")]
+  
+  syn_y <- survey_syn_data[, c("alc.1","alc.2",
+                 "drug.1","drug.2",
+                 "cann.1","cann.2",
+                 "cash.1","cash.2",
+                 "region.1","region.2","region.3","region.4","region.5")]
+  
+  mlp_re_syns[i] <- mlp_re(syn_train, test, syn_y)
+  
+}
+mlp_re_syns
+mean(mlp_re_syns)
+
+
+```
+
+We returned the proportion if observations that will have a less accuracte prediction with the synthetic data compared to with the confidential data
+
+
+
+## Global Utility Evaluation (pMSE)
+
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+log_pMSE <- function(syndata, orig_survey){
+  
+n <- nrow(orig_survey)
+merged_data <- rbind(orig_survey, syndata)
+merged_data$S <- c(rep(0, n), rep(1, n))
+
+
+log_reg <- stats::glm(formula = S ~ (as.factor(age) + as.factor(gender) + as.factor(employ) +
+                        as.factor(race) + as.factor(educ) + as.factor(alc) + as.factor(drug) +
+                        as.factor(cann) + as.factor(cash) + as.factor(insurance) +
+                          as.factor(region))^2,
+                      family = "binomial", 
+                      data = merged_data)
+
+pred <- stats::predict(log_reg, newdata = merged_data)
+probs <- exp(pred) / (1 + exp(pred))
+
+pMSE <- 1 / (2 * n) * sum((probs - 1 / 2)^2)
+return (pMSE)
+
+}
+
+pMSE_list = rep(0,5)
+for(i in 1:m){
+  pMSE_list[i] = log_pMSE(survey_syn$syndata[[i]], survey)
+}
+
+mean(pMSE_list)
+
+```
+
+```{r size = "footnotesize", warning = FALSE, message = FALSE}
+
+mlp_pMSE <- function(syndata){
+  
+n <- nrow(survey)
+merged_data <- rbind(survey, syndata)
+merged_data$S <- c(rep(0, n), rep(1, n))
+
+#shuffle merged_data
+
+data <- merged_data[sample(1:nrow(merged_data),length(1:nrow(merged_data))),1:ncol(merged_data)]
+
+dummy <- dummyVars(" ~ .", data = data)
+survey_mlp <- data.frame(predict(dummy, newdata = data ))
+
+
+train_x <- survey_mlp[,1:11]
+train_y <- survey_mlp[,12]
+
+model <- mlp(train_x, 
+             train_y, 
+             size = c(10, 5), 
+             initFunc = "Randomize_Weights",
+             initFuncParams = c(-0.3, 0.3),
+             learnFuncParams=c(0.1, 0),
+             learnFunc = "Rprop",
+             maxit = 100)
+
+pred <- stats::predict(model, newdata = train_x)
+probs <- exp(pred) / (1 + exp(pred))
+pMSE <- 1 / (2 * n) * sum((probs - 1 / 2)^2)
+return (pMSE)
+
+}
+
+```
+
+
+```{r}
+sum <- 0
+for(i in 1:m){
+  sum <- sum + mlp_pMSE(survey_syn$syndata[[i]])
+}
+
+sum/m
+```
+
